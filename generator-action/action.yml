@@ -1,0 +1,25 @@
+name: KDAB CodeBrowser generator
+description: Runs the KDAB CodeBrowser generator
+inputs:
+  output:
+    description: The output directory where the generated files will be put
+    required: true
+    default: output
+  build:
+    description: The build directory containing compile_commands.json
+    required: true
+    default: build
+  project:
+    description: "Project specification, that is the name of the project, the absolute path of the source code, and the revision separated by colons example: -p projectname:/path/to/source/code:0.3beta"
+    required: true
+  external:
+    description: External references
+    required: false
+runs:
+  using: docker
+  image: Dockerfile
+  args:
+  - /github/workspace/${{ inputs.output }}
+  - /github/workspace/${{ inputs.build }}
+  - ${{ inputs.project }}
+  - ${{ inputs.external }}
