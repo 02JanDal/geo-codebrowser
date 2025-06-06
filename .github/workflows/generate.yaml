@@ -23,7 +23,7 @@ jobs:
             ${{ runner.os }}-codebrowser
       - uses: awalsh128/cache-apt-pkgs-action@v1.4.3
         with:
-          packages: cmake llvm-16 clang-17 libclang-17-dev llvm-17-dev libclang-cpp17 ninja-build wget unzip ca-certificates
+          packages: cmake llvm-18 clang-18 libclang-18-dev llvm-18-dev libclang-cpp18 ninja-build wget unzip ca-certificates libarmadillo-dev
         if: steps.cache.outputs.cache-hit != 'true'
       - uses: actions/checkout@v4
         with:
@@ -153,9 +153,152 @@ jobs:
           name: docs-pdal
           path: ${{github.workspace}}/output
 
+  build-pdal:
+    name: Build PDAL
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Cache build artifacts
+        uses: actions/cache@v3
+        id: cache
+        with:
+          path: |
+            ${{github.workspace}}/deb/
+          key: ${{ runner.os }}-pdal-2.8.4
+          restore-keys: |
+            ${{ runner.os }}-pdal-
+      - run: sudo apt update && sudo apt install -y libblas-dev liblapack-dev libproj-dev libgdal-dev
+        if: steps.cache.outputs.cache-hit != 'true'
+      - uses: actions/checkout@v4
+        with:
+          repository: PDAL/PDAL
+          path: ${{github.workspace}}/PDAL
+          ref: 2.8.4
+        if: steps.cache.outputs.cache-hit != 'true'
+      - name: Build
+        run: |
+          mkdir ${{github.workspace}}/{pdal-build,deb}
+          cd ${{github.workspace}}/pdal-build
+          cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local -DWITH_TESTS=OFF -DCPACK_GENERATOR=DEB -DCPACK_DEBIAN_PACKAGE_DEPENDS=libproj25,libgdal34t64,libblas3,liblapack3 -DCPACK_PACKAGE_CONTACT=dummy@example.com ${{github.workspace}}/PDAL
+          cmake --build . --target package
+          mv *.deb ${{github.workspace}}/deb/
+        if: steps.cache.outputs.cache-hit != 'true'
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdal
+          path: ${{github.workspace}}/deb/*.deb
+
+  generate-qgis:
+    name: Generate QGIS
+    runs-on: ubuntu-24.04
+    needs: [build-generator, build-pdal]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: generator
+          path: ${{github.workspace}}/../generator
+      - uses: actions/download-artifact@v4
+        with:
+          name: pdal
+          path: ${{github.workspace}}/../pdal
+      - name: Install dependencies
+        run: sudo apt install libclang-cpp17 apt-transport-https ca-certificates dh-python gdal-bin gnupg gpsbabel graphviz libaio-dev libdraco-dev libexiv2-27 libfcgi-dev libgsl27 libprotobuf-dev libqca-qt5-2-plugins libqt53dextras5 libqt53drender5 libqt5concurrent5 libqt5keychain1 libqt5positioning5 libqt5multimedia5 libqt5multimediawidgets5 libqt5qml5 libqt5quick5 libqt5quickcontrols2-5 libqt5quickwidgets5 libqt5serialport5 libqt5sql5-odbc libqt5sql5-sqlite libqt5xml5 libqt5webkit5 libqwt-qt5-6 libspatialindex6 libsqlite3-mod-spatialite libzip-dev lighttpd locales poppler-utils python3-future python3-gdal python3-mock python3-nose2 python3-numpy python3-owslib python3-pip python3-psycopg2 python3-pyproj python3-pyqt5 python3-pyqt5.qsci python3-pyqt5.qtsql python3-pyqt5.qtsvg python3-pyqt5.qtwebkit python3-pyqt5.qtpositioning python3-pyqt5.qtmultimedia python3-pyqt5.qtserialport python3-sip python3-termcolor python3-yaml qpdf qt3d-assimpsceneimport-plugin qt3d-defaultgeometryloader-plugin qt3d-gltfsceneio-plugin qt3d-scene2d-plugin qt5-image-formats-plugins saga supervisor unzip xauth xfonts-100dpi xfonts-75dpi xfonts-base xfonts-scalable ocl-icd-libopencl1 libgdal-dev libproj-dev libblas-dev liblapack-dev protobuf-compiler libexiv2-dev qtbase5-dev libqt5serialport5-dev qtpositioning5-dev qtmultimedia5-dev	qtdeclarative5-dev libqt5svg5-dev	libqt5webkit5-dev qt3d5-dev qtkeychain-qt5-dev libqca-qt5-2-dev libgsl-dev qttools5-dev libqscintilla2-qt5-dev libspatialindex-dev libqwt-qt5-dev libproj25 libgdal34t64 libblas3 liblapack3
+      - run: sudo dpkg -i ${{github.workspace}}/../pdal/*.deb
+      - run: pip install numpy nose2 pyyaml mock future termcolor oauthlib pyopenssl pep8 pexpect capturer sphinx requests six hdbcli shapely
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: QGIS/qgis
+          path: ${{github.workspace}}/src
+      - uses: actions/checkout@v4
+        with:
+          repository: OSgeo/gdal
+          path: ${{github.workspace}}/gdal
+      - uses: actions/checkout@v4
+        with:
+          repository: PDAL/PDAL
+          path: ${{github.workspace}}/pdal
+      - name: Determine Git version
+        run: echo "VERSION=`git describe --always --tags`" >> "$GITHUB_ENV"
+        working-directory: ${{github.workspace}}/src
+      - name: Create folders
+        run: mkdir ${{github.workspace}}/{build,output}
+      - name: Generate compile_commands.json
+        run: |
+          cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ${{github.workspace}}/src
+        working-directory: ${{github.workspace}}/build
+      - name: Fix permissions
+        run: |
+          chmod +x ${{github.workspace}}/../generator/build/generator/codebrowser_generator
+          chmod +x ${{github.workspace}}/../generator/build/indexgenerator/codebrowser_indexgenerator
+      - name: Generate HTML
+        run: |
+          ${{github.workspace}}/../generator/build/generator/codebrowser_generator \
+            -a \
+            -o ${{github.workspace}}/output \
+            -b ${{github.workspace}}/build \
+            -p QGIS:${{github.workspace}}/src:$VERSION \
+            -e include/gdal:/usr/include/gdal/:https://${{github.repository_owner}}.github.io/geo-codebrowser/gdal \
+            -e include/pdal:/usr/include/pdal/:https://${{github.repository_owner}}.github.io/geo-codebrowser/pdal \
+            -e include/x86_64-linux-gnu/qt5:/usr/include/x86_64-linux-gnu/qt5/:https://codebrowser.dev/qt5
+          ${{github.workspace}}/../generator/build/indexgenerator/codebrowser_indexgenerator ${{github.workspace}}/output
+      - name: Clean invalid files
+        run: find ${{github.workspace}}/output -type f \( -name '*\**' -o -name '*\<**' -o -name '*\>**' \) -exec rm -- {} +
+      - name: Fix search paths
+        shell: python
+        run: |
+          import os, re
+          from pathlib import Path
+
+          GDAL_RE = re.compile(r"gdal/include/gdal/([a-z0-9_]+\.h)")
+          PDAL_RE = re.compile(r"include/pdal/([a-z0-9_]+\.h)")
+          QT_RE = re.compile(r"qt5/include/x86_64-linux-gnu/qt5/(Qt[a-zA-Z0-9]+/Q[a-zA-Z0-9]+(\.h)?)")
+
+          def gdal_replace(match):
+            path = next((Path(os.environ['GITHUB_WORKSPACE']) / "gdal").rglob(match.group(1)), None)
+            if not path:
+              print(f"Warning: GDAL header {match.group(1)} not found.")
+              return match.group(0)  # Return the original if not found
+            return f"gdal/GDAL/{path.relative_to(Path(os.environ['GITHUB_WORKSPACE']) / 'gdal')}"
+
+          def pdal_replace(match):
+            path = next((Path(os.environ['GITHUB_WORKSPACE']) / "pdal").rglob(match.group(1)), None)
+            if not path:
+              print(f"Warning: PDAL header {match.group(1)} not found.")
+              return match.group(0)  # Return the original if not found
+            return f"pdal/PDAL/{path.relative_to(Path(os.environ['GITHUB_WORKSPACE']) / 'pdal')}"
+
+          for file in (Path(os.environ['GITHUB_WORKSPACE']) / "output").rglob('*.html'):
+              content = file.read_text()
+              changed = False
+
+              if "gdal/include/gdal/" in content:
+                print("Fixing GDAL include paths in", file)
+                content = GDAL_RE.sub(gdal_replace, content)
+                changed = True
+              if "include/pdal/" in content:
+                print("Fixing PDAL include paths in", file)
+                content = PDAL_RE.sub(pdal_replace, content)
+                changed = True
+              if "include/x86_64-linux-gnu/qt5/" in content:
+                print("Fixing Qt include paths in", file)
+                content = QT_RE.sub(r"qtbase/include/\1", content)
+                changed = True
+
+              if changed:
+                file.write_text(content)
+      - name: Pre-package output
+        run: tar -czf ${{github.workspace}}/output.tar.gz ${{github.workspace}}/output
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-qgis
+          path: ${{github.workspace}}/output.tar.gz
+
   publish:
     name: Publish to Github Pages
-    needs: [generate-pdal, generate-gdal]
+    needs: [generate-pdal, generate-gdal, generate-qgis]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -164,6 +307,7 @@ jobs:
       pages: write
       id-token: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: docs-*
@@ -174,9 +318,12 @@ jobs:
       - name: Arrange files for deployment
         run: |
           mkdir deploy
+          cp ${{github.workspace}}/index.html deploy/index.html
           mv ${{github.workspace}}/../generator/data deploy
           mv ${{github.workspace}}/docs-gdal deploy/gdal
           mv ${{github.workspace}}/docs-pdal deploy/pdal
+          tar -xf ${{github.workspace}}/docs-qgis/output.tar.gz
+          mv home/runner/work/geo-codebrowser/geo-codebrowser/output deploy/qgis
           ls deploy
       - uses: actions/upload-pages-artifact@v3
         with:
