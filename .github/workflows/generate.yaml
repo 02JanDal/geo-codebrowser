@@ -10,19 +10,34 @@ jobs:
     name: Build codebrowser generator
     runs-on: ubuntu-latest
     steps:
+      - name: Cache build artifacts
+        uses: actions/cache@v3
+        id: cache
+        with:
+          path: |
+            ${{github.workspace}}/codebrowser/build/generator/codebrowser_generator
+            ${{github.workspace}}/codebrowser/build/indexgenerator/codebrowser_indexgenerator
+            ${{github.workspace}}/codebrowser/data
+          key: ${{ runner.os }}-codebrowser
+          restore-keys: |
+            ${{ runner.os }}-codebrowser
       - uses: awalsh128/cache-apt-pkgs-action@v1.4.3
         with:
           packages: cmake llvm-16 clang-17 libclang-17-dev llvm-17-dev libclang-cpp17 ninja-build wget unzip ca-certificates
+        if: steps.cache.outputs.cache-hit != 'true'
       - uses: actions/checkout@v4
         with:
           repository: KDAB/codebrowser
           path: ${{github.workspace}}/codebrowser
+        if: steps.cache.outputs.cache-hit != 'true'
       - run: mkdir ${{github.workspace}}/codebrowser/build
-      - run: cmake -DCMAKE_BUILD_TYPE=Release -G Ninja .. && cmake --build . --parallel 2
+        if: steps.cache.outputs.cache-hit != 'true'
+      - run: cmake -DCMAKE_BUILD_TYPE=Release -G Ninja .. && cmake --build . --parallel 4
         working-directory: ${{github.workspace}}/codebrowser/build
         env:
           CC: /usr/bin/clang-17
           CXX: /usr/bin/clang++-17
+        if: steps.cache.outputs.cache-hit != 'true'
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
